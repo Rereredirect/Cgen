@@ -5,6 +5,6 @@
   },
   "v1.0.1": {
     "name": "v1.0.1",
-    "body":"#[Fixed]\n- 修正了分页符带来的异常。"
+    "body":"#[Added]\n- 集成VirusTotal自动化扫描，确保Release附件安全无毒。\n\n#[Fixed]\n- 修正了分页符带来的异常。"
   }
 }

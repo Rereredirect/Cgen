@@ -66,6 +66,117 @@ jobs:
           & $rcedit $bin --set-version-string "FileVersion" $ver
           & $rcedit $bin --set-version-string "ProductVersion" $ver
 
+      - name: Upload binary to VirusTotal
+        id: vt_upload
+        shell: pwsh
+        run: |
+          $apiKey = "${{ secrets.VIRUS_TOTAL }}"
+          if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            throw "Missing GitHub secret: VIRUS_TOTAL"
+          }
+
+          $headers = @{
+            "x-apikey" = $apiKey
+            "accept"   = "application/json"
+          }
+
+          $response = Invoke-RestMethod -Method Post -Uri "https://www.virustotal.com/api/v3/files" -Headers $headers -Form @{ file = Get-Item "target/release/cgen.exe" }
+
+          $analysisId = $response.data.id
+          if ([string]::IsNullOrWhiteSpace($analysisId)) {
+            throw "VirusTotal upload succeeded but analysis id is empty"
+          }
+
+          echo "ANALYSIS_ID=$analysisId" >> $env:GITHUB_OUTPUT
+
+      - name: Poll VirusTotal analysis status
+        id: vt_poll
+        shell: pwsh
+        run: |
+          $apiKey = "${{ secrets.VIRUS_TOTAL }}"
+          $analysisId = "${{ steps.vt_upload.outputs.ANALYSIS_ID }}"
+          $headers = @{
+            "x-apikey" = $apiKey
+            "accept"   = "application/json"
+          }
+
+          $maxAttempts = 30
+          $sleepSeconds = 20
+
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+            $resp = Invoke-RestMethod -Method Get -Uri "https://www.virustotal.com/api/v3/analyses/$analysisId" -Headers $headers
+
+            $status = $resp.data.attributes.status
+            $stats = $resp.data.attributes.stats
+
+            Write-Host "[VT] Attempt $i/$maxAttempts, status=$status"
+
+            if ($status -eq "completed") {
+              $malicious = [int]($stats.malicious)
+              $suspicious = [int]($stats.suspicious)
+              $harmless = [int]($stats.harmless)
+              $undetected = [int]($stats.undetected)
+
+              $analysisLink = "https://www.virustotal.com/gui/file-analysis/$analysisId"
+
+              $results = $resp.data.attributes.results
+              $flagged = @()
+              foreach ($engine in $results.PSObject.Properties.Name) {
+                $item = $results.$engine
+                if ($item.category -eq "malicious" -or $item.category -eq "suspicious") {
+                  $verdict = if ([string]::IsNullOrWhiteSpace($item.result)) { "(no verdict)" } else { $item.result }
+                  $flagged += "- $engine [$($item.category)]: $verdict"
+                }
+              }
+
+              if ($flagged.Count -eq 0) {
+                $flagged += "- 无厂商报 malicious/suspicious"
+              }
+
+              $vtSummary = @(
+                "### VirusTotal 分析结果",
+                "- 分析链接: $analysisLink",
+                "- malicious: $malicious",
+                "- suspicious: $suspicious",
+                "- harmless: $harmless",
+                "- undetected: $undetected",
+                "",
+                "**命中厂商列表（malicious/suspicious）**"
+              ) + $flagged
+
+              echo "MALICIOUS=$malicious" >> $env:GITHUB_OUTPUT
+              echo "SUSPICIOUS=$suspicious" >> $env:GITHUB_OUTPUT
+              echo "HARMLESS=$harmless" >> $env:GITHUB_OUTPUT
+              echo "UNDETECTED=$undetected" >> $env:GITHUB_OUTPUT
+              echo "ANALYSIS_LINK=$analysisLink" >> $env:GITHUB_OUTPUT
+              echo "VT_SUMMARY<<EOF" >> $env:GITHUB_OUTPUT
+              $vtSummary -join "`n" >> $env:GITHUB_OUTPUT
+              echo "EOF" >> $env:GITHUB_OUTPUT
+              break
+            }
+
+            if ($i -eq $maxAttempts) {
+              throw "VirusTotal analysis timeout: status is still '$status'"
+            }
+
+            Start-Sleep -Seconds $sleepSeconds
+          }
+
+      - name: Enforce VirusTotal security gate
+        shell: pwsh
+        run: |
+          $malicious = [int]"${{ steps.vt_poll.outputs.MALICIOUS }}"
+          $suspicious = [int]"${{ steps.vt_poll.outputs.SUSPICIOUS }}"
+          $harmless = [int]"${{ steps.vt_poll.outputs.HARMLESS }}"
+          $undetected = [int]"${{ steps.vt_poll.outputs.UNDETECTED }}"
+
+          Write-Host "[VT] stats: malicious=$malicious suspicious=$suspicious harmless=$harmless undetected=$undetected"
+
+          $flagged = $malicious + $suspicious
+          if ($flagged -gt 10) {
+            throw "VirusTotal gate failed: malicious+suspicious=$flagged (>10)"
+          }
+
       - name: Read release notes from updates.json
         if: startsWith(github.ref, 'refs/tags/')
         id: release
@@ -77,16 +188,20 @@ jobs:
             $entry = $json.$tag
             echo "NAME=$($entry.name)" >> $env:GITHUB_OUTPUT
             $body = $entry.body -replace "`r`n", "`n"
-            # 使用 heredoc 写入多行 body
-            echo "BODY<<EOF" >> $env:GITHUB_OUTPUT
-            echo $body >> $env:GITHUB_OUTPUT
-            echo "EOF" >> $env:GITHUB_OUTPUT
           } else {
             echo "NAME=$tag" >> $env:GITHUB_OUTPUT
-            echo "BODY<<EOF" >> $env:GITHUB_OUTPUT
-            echo "Release $tag" >> $env:GITHUB_OUTPUT
-            echo "EOF" >> $env:GITHUB_OUTPUT
+            $body = "Release $tag"
           }
+
+          $vtSection = "${{ steps.vt_poll.outputs.VT_SUMMARY }}"
+          if (-not [string]::IsNullOrWhiteSpace($vtSection)) {
+            $body = "$body`n`n---`n`n$vtSection"
+          }
+
+          # 使用 heredoc 写入多行 body
+          echo "BODY<<EOF" >> $env:GITHUB_OUTPUT
+          echo $body >> $env:GITHUB_OUTPUT
+          echo "EOF" >> $env:GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
