@@ -2,5 +2,9 @@
   "v1.0.0": {
     "name": "v1.0.0",
     "body": "首个正式版本发布\n\n#[Added]\n- 自动解析 PDF 题目与 C 源码函数\n- 编译执行并捕获输出（支持交互式输入）\n- 生成格式化 Word 实验报告\n- 自动检测 GCC / Clang / MSVC 编译器\n- 支持 config.json 手动配置 MinGW 路径"
+  },
+  "v1.0.1": {
+    "name": "v1.0.1",
+    "body":"#[Fixed]\n- 修正了分页符带来的异常。"
   }
 }

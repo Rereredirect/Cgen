@@ -260,13 +260,20 @@ fn add_problem_section_with_results(
     // 标题2：分析
     doc = add_styled_heading(doc, "分析", 2);
     
-    // 分析内容（留空）
-    doc = add_text_content(doc, "");
-    
-    // 分页符
+    // 分析内容预留一个可编辑正文段落，避免光标直接落到分页段
     doc = doc.add_paragraph(
-        Paragraph::new().page_break_before(true)
+        Paragraph::new()
+            .add_run(
+                Run::new()
+                    .add_text("")
+                    .size(22)  // 11号
+            )
     );
+    
+    // // 分页符
+    // doc = doc.add_paragraph(
+    //     Paragraph::new().page_break_before(true)
+    // );
     
     doc
 }
