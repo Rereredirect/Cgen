@@ -1,0 +1,23 @@
+[package]
+name = "cgen"
+version = "1.0.0"
+edition = "2021"
+autobins = false
+
+[[bin]]
+name = "cgen"
+path = "src/main.rs"
+
+[dependencies]
+pdf-extract = "0.7"
+docx-rs = "0.4"
+regex = "1.0"
+anyhow = "1.0"
+tempfile = "3.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+crossterm = "0.28"
+
+[build-dependencies]
+
+[dev-dependencies]

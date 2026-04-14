@@ -1,0 +1,103 @@
+name: Build & Package
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Read version from Cargo.toml
+        id: version
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Read properties.json
+        id: props
+        shell: pwsh
+        run: |
+          $json = Get-Content .github/build-assets/properties.json | ConvertFrom-Json
+          echo "NAME=$($json.name)" >> $env:GITHUB_OUTPUT
+          echo "VENDOR=$($json.vendor)" >> $env:GITHUB_OUTPUT
+          echo "COPYRIGHT=$($json.copyright)" >> $env:GITHUB_OUTPUT
+
+      - name: Download rcedit
+        run: |
+          curl -L -o rcedit.exe https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe
+      
+      - name: Apply icon & version info with rcedit
+        shell: pwsh
+        run: |
+          $bin = "target/release/cgen.exe"
+          $rcedit = "./rcedit.exe"
+          $ver = "${{ steps.version.outputs.VERSION }}"
+          & $rcedit $bin --set-icon .github/build-assets/cgen.ico
+          & $rcedit $bin --set-file-version $ver
+          & $rcedit $bin --set-product-version $ver
+          & $rcedit $bin --set-version-string "ProductName" "${{ steps.props.outputs.NAME }}"
+          & $rcedit $bin --set-version-string "CompanyName" "${{ steps.props.outputs.VENDOR }}"
+          & $rcedit $bin --set-version-string "LegalCopyright" "${{ steps.props.outputs.COPYRIGHT }}"
+          & $rcedit $bin --set-version-string "FileDescription" "${{ steps.props.outputs.NAME }}"
+          & $rcedit $bin --set-version-string "FileVersion" $ver
+          & $rcedit $bin --set-version-string "ProductVersion" $ver
+
+      - name: Read release notes from updates.json
+        if: startsWith(github.ref, 'refs/tags/')
+        id: release
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $json = Get-Content .github/build-assets/updates.json -Raw | ConvertFrom-Json
+          if ($json.PSObject.Properties.Name -contains $tag) {
+            $entry = $json.$tag
+            echo "NAME=$($entry.name)" >> $env:GITHUB_OUTPUT
+            $body = $entry.body -replace "`r`n", "`n"
+            # 使用 heredoc 写入多行 body
+            echo "BODY<<EOF" >> $env:GITHUB_OUTPUT
+            echo $body >> $env:GITHUB_OUTPUT
+            echo "EOF" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "NAME=$tag" >> $env:GITHUB_OUTPUT
+            echo "BODY<<EOF" >> $env:GITHUB_OUTPUT
+            echo "Release $tag" >> $env:GITHUB_OUTPUT
+            echo "EOF" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cgen-windows-x64
+          path: target/release/cgen.exe
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.release.outputs.NAME }}
+          body: ${{ steps.release.outputs.BODY }}
+          files: target/release/cgen.exe
